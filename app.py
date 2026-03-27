@@ -6,7 +6,7 @@ from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
 # 1. Page Configuration
 st.set_page_config(page_title="Tomato Doctor Live", layout="wide")
 
-st.title("🍅 Tomato Doctor: Real-Time AI Diagnostic")
+st.title("Tomato Doctor: Real-Time AI Diagnostic")
 st.write("Point your camera at a tomato leaf to detect diseases instantly.")
 
 # 2. Load the trained model (best.pt must be in the same folder)
