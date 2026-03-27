@@ -4,20 +4,20 @@ import av
 import threading
 from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
 
-# 1. Page Setup
-st.set_page_config(page_title="Tomato Analysis System", layout="centered")
-st.title("Tomato Health Scanner")
-st.write("Click Start to open the camera. Point at a leaf and click Capture to lock the image.")
+# 1. Page Layout
+st.set_page_config(page_title="Tomato Disease Detection System", layout="centered")
+st.title("Tomato Health Analyzer")
+st.write("Use this tool to scan tomato leaves for diseases in real-time.")
 
-# 2. Load the optimized brain (ONNX)
+# 2. Load Optimized Model
 @st.cache_resource
 def load_model():
-    # task='detect' is required for ONNX models
+    # Loading the ONNX file you just exported
     return YOLO('best.onnx', task='detect')
 
 model = load_model()
 
-# 3. Frame Processing Class
+# 3. Detection Engine
 class VideoProcessor:
     def __init__(self):
         self.frame_lock = threading.Lock()
@@ -26,7 +26,7 @@ class VideoProcessor:
     def recv(self, frame):
         img = frame.to_ndarray(format="bgr24")
         
-        # Performance: imgsz=320 is critical for smooth video on mobile
+        # High-speed inference
         results = model.predict(img, conf=0.40, imgsz=320, verbose=False)
         annotated_img = results[0].plot()
 
@@ -35,45 +35,48 @@ class VideoProcessor:
 
         return av.VideoFrame.from_ndarray(annotated_img, format="bgr24")
 
-# 4. Connection Configuration
-# We use a Google STUN server to fix the 'constant loading' issue on mobile networks
+# 4. Connection Logic (Fixes the 'Constant Loading' issue)
 RTC_CONFIGURATION = RTCConfiguration(
-    {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+    {
+        "iceServers": [
+            {"urls": ["stun:stun.l.google.com:19302"]},
+            {"urls": ["stun:stun1.l.google.com:19302"]}
+        ]
+    }
 )
 
 # 5. Camera Interface
-# This section mimics a native camera app behavior
 ctx = webrtc_streamer(
-    key="camera-app",
+    key="tomato-scanner",
     mode=WebRtcMode.SENDRECV,
     rtc_configuration=RTC_CONFIGURATION,
-    video_processor_factory=VideoProcessor,
     media_stream_constraints={
         "video": {
-            "facingMode": "environment", # Tries to force the back camera
+            "facingMode": "environment", # Focuses on the back camera
             "width": {"ideal": 640},
             "height": {"ideal": 480}
         },
         "audio": False
     },
+    video_processor_factory=VideoProcessor,
     async_processing=True,
 )
 
-# 6. Capture Control
+# 6. Snapshot Feature
 if ctx.video_processor:
-    if st.button("Capture Photo"):
+    if st.button("Capture and Lock Image"):
         with ctx.video_processor.frame_lock:
             if ctx.video_processor.active_frame is not None:
-                st.session_state["locked_result"] = ctx.video_processor.active_frame
+                st.session_state["result_snapshot"] = ctx.video_processor.active_frame
             else:
-                st.error("Camera feed not ready. Please wait.")
+                st.error("Wait for camera to initialize before capturing.")
 
-# 7. Result Display
-if "locked_result" in st.session_state:
-    st.markdown("---")
-    st.subheader("Captured Analysis")
-    st.image(st.session_state["locked_result"], channels="BGR", use_container_width=True)
+# 7. Results Section
+if "result_snapshot" in st.session_state:
+    st.divider()
+    st.subheader("Analysis Result")
+    st.image(st.session_state["result_snapshot"], channels="BGR", use_container_width=True)
     
-    if st.button("Discard and Scan Again"):
-        del st.session_state["locked_result"]
+    if st.button("Reset Scanner"):
+        del st.session_state["result_snapshot"]
         st.rerun()
