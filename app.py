@@ -1,70 +1,79 @@
 import streamlit as st
 from ultralytics import YOLO
 import av
-import cv2
+import threading
 from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
 
-# 1. Page Setup
-st.set_page_config(page_title="Tomato AI Pro", layout="centered")
-st.title("Tomato Disease Detector/Scanner")
-st.write("Point at a leaf. If using a phone, use the 'SELECT DEVICE' button below to switch to the back camera.")
+# 1. Page Configuration
+st.set_page_config(page_title="Tomato Disease Analyzer", layout="centered")
+st.title("Tomato Health Scanner: Real-Time Analysis")
 
-# 2. Fast Model Loading
+# 2. Load Model (Optimized ONNX)
 @st.cache_resource
 def load_model():
-    # Use the .onnx version we created for max speed
+    # This loads the optimized brain you exported in VS Code
     return YOLO('best.onnx', task='detect')
 
 model = load_model()
 
-# 3. High-Performance Video Processor
+# 3. Detection Engine
 class VideoProcessor:
     def __init__(self):
-        self.frame_count = 0
+        self.frame_lock = threading.Lock()
         self.last_annotated_frame = None
 
     def recv(self, frame):
         img = frame.to_ndarray(format="bgr24")
-        self.frame_count += 1
-
-        # Optimization: Only run AI every 5 frames to keep the video smooth
-        if self.frame_count % 5 == 0:
-            # imgsz=320 makes the 'math' 4x faster for the Render CPU
-            results = model.predict(img, conf=0.45, imgsz=320, verbose=False)
-            self.last_annotated_frame = results[0].plot()
-
-        # If we have a processed frame, show it. Otherwise, show raw video.
-        if self.last_annotated_frame is not None:
-            return av.VideoFrame.from_ndarray(self.last_annotated_frame, format="bgr24")
         
-        return av.VideoFrame.from_ndarray(img, format="bgr24")
+        # The core detection code:
+        # imgsz=320 ensures the CPU can keep up with the video stream
+        results = model.predict(img, conf=0.45, imgsz=320, verbose=False)
+        annotated_img = results[0].plot()
 
-# 4. Global WebRTC Config (Essential for Mobile/WiFi)
+        # Update the 'last_annotated_frame' for the snapshot feature
+        with self.frame_lock:
+            self.last_annotated_frame = annotated_img
+
+        return av.VideoFrame.from_ndarray(annotated_img, format="bgr24")
+
+# 4. Connection Configuration (STUN server for mobile networks)
 RTC_CONFIGURATION = RTCConfiguration(
     {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
 )
 
-# 5. The Real-Time Camera Interface
+# 5. The Live Interface
 ctx = webrtc_streamer(
-    key="tomato-ai-final",
+    key="detection-system",
     mode=WebRtcMode.SENDRECV,
     rtc_configuration=RTC_CONFIGURATION,
     video_processor_factory=VideoProcessor,
-    # This setting allows the user to choose their camera (Front/Back)
     media_stream_constraints={
-        "video": True,
+        "video": {
+            "facingMode": "environment", # Directs phone to use the back camera
+            "width": {"ideal": 640},
+            "height": {"ideal": 480}
+        },
         "audio": False
     },
     async_processing=True,
 )
 
-# 6. User Instructions
-if ctx.state.playing:
-    st.success("✅ AI Active. Hold the leaf steady for 1 second to detect.")
-else:
-    st.info("💡 Click 'START' and allow camera access to begin.")
+# 6. Snapshot and Lock Logic
+if ctx.video_processor:
+    if st.button("Capture and Lock Detection"):
+        with ctx.video_processor.frame_lock:
+            if ctx.video_processor.last_annotated_frame is not None:
+                # Save the frame to the server's session memory
+                st.session_state["captured_image"] = ctx.video_processor.last_annotated_frame
+            else:
+                st.warning("Camera is initializing. Please try again in a moment.")
 
-st.markdown("""
----
-**Presentation Tip:** If the video is blank on Android, tap the **Lock Icon** in the Chrome address bar and ensure **Camera Permission** is allowed for this specific site.
-""")
+# 7. Display Results
+if "captured_image" in st.session_state:
+    st.markdown("---")
+    st.subheader("Locked Analysis Result")
+    st.image(st.session_state["captured_image"], channels="BGR", use_container_width=True)
+    
+    if st.button("Clear Captured Result"):
+        del st.session_state["captured_image"]
+        st.rerun()
