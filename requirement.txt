@@ -2,3 +2,5 @@ ultralytics
 streamlit
 pillow
 numpy
+streamlit-webrtc
+av
