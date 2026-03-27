@@ -6,7 +6,7 @@ from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
 
 # 1. Page Configuration
 st.set_page_config(page_title="Tomato Disease Analyzer", layout="centered")
-st.title("Tomato Health Scanner: Real-Time Analysis")
+st.title("Tomato Health Scanner")
 
 # 2. Load Model (Optimized ONNX)
 @st.cache_resource
