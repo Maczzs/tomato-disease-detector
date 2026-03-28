@@ -4,7 +4,6 @@ import numpy as np
 import onnxruntime as ort
 import av
 import threading
-from PIL import Image
 from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
 
 st.set_page_config(page_title="Tomato Health Pro", layout="centered")
@@ -26,6 +25,13 @@ session = load_session()
 
 def run_detection(img):
     h_orig, w_orig = img.shape[:2]
+    
+    # --- DYNAMIC SCALING ---
+    # This makes sure boxes/text aren't tiny on 4K photos
+    base_thickness = max(2, int(w_orig / 250))
+    base_font_scale = max(0.6, w_orig / 900)
+    
+    # Pre-process for ONNX (Always 320 for the AI's brain)
     img_resized = cv2.resize(img, (320, 320))
     img_input = img_resized.transpose(2, 0, 1)
     img_input = img_input[np.newaxis, :, :, :].astype(np.float32) / 255.0
@@ -41,13 +47,21 @@ def run_detection(img):
         
         if score > 0.45:
             x, y, w, h = row[0], row[1], row[2], row[3]
+            
+            # Mapping coordinates back to the ORIGINAL RESOLUTION
             x1, y1 = int((x - w/2) * w_orig / 320), int((y - h/2) * h_orig / 320)
             x2, y2 = int((x + w/2) * w_orig / 320), int((y + h/2) * h_orig / 320)
             
-            cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 3)
+            # Draw with dynamic thickness
+            cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), base_thickness)
+            
             label_text = f"{CLASSES[class_id]} ({int(score*100)}%)"
-            text_y = y1 - 10 if y1 > 20 else y1 + 20
-            cv2.putText(img, label_text, (x1, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            # Adjust text offset based on image size
+            offset = int(h_orig * 0.02)
+            text_y = y1 - offset if y1 > offset*2 else y1 + offset*2
+            
+            cv2.putText(img, label_text, (x1, text_y), 
+                        cv2.FONT_HERSHEY_SIMPLEX, base_font_scale, (255, 255, 255), base_thickness // 2 + 1)
             
             if CLASSES[class_id] not in detected_labels:
                 detected_labels.append(CLASSES[class_id])
@@ -55,7 +69,7 @@ def run_detection(img):
     return img, detected_labels
 
 # --- UI TABS ---
-tab1, tab2 = st.tabs(["📷 Live Camera", "📁 Upload Image"])
+tab1, tab2 = st.tabs(["📷 Live Camera", "📁 Full-Res Upload"])
 
 with tab1:
     class VideoProcessor:
@@ -73,7 +87,7 @@ with tab1:
         key="diagnostic-scanner",
         mode=WebRtcMode.SENDRECV,
         rtc_configuration=RTC_CONFIGURATION,
-        media_stream_constraints={"video": {"facingMode": "environment"}, "audio": False},
+        media_stream_constraints={"video": {"facingMode": "environment", "width": 640}, "audio": False},
         video_processor_factory=VideoProcessor,
         async_processing=True,
     )
@@ -82,40 +96,42 @@ with tab1:
         if st.button("📸 CAPTURE AND ANALYZE"):
             with ctx.video_processor.frame_lock:
                 if ctx.video_processor.last_raw_frame is not None:
+                    # Video capture remains at 640 width (optimized for speed)
                     snap = ctx.video_processor.last_raw_frame.copy()
                     result_img, labels = run_detection(snap)
                     st.session_state["result_img"] = result_img
                     st.session_state["result_labels"] = labels
 
 with tab2:
-    uploaded_file = st.file_uploader("Choose a tomato leaf image...", type=["jpg", "jpeg", "png"])
+    # No limit on resolution here!
+    uploaded_file = st.file_uploader("Upload original leaf photo (High Quality)", type=["jpg", "jpeg", "png"])
     if uploaded_file is not None:
-        # Convert uploaded file to OpenCV format
         file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
-        opencv_img = cv2.imdecode(file_bytes, 1)
+        full_res_img = cv2.imdecode(file_bytes, 1)
         
-        if st.button("🔍 ANALYZE UPLOADED IMAGE"):
-            result_img, labels = run_detection(opencv_img)
-            st.session_state["result_img"] = result_img
-            st.session_state["result_labels"] = labels
+        st.write(f"Detected Resolution: {full_res_img.shape[1]}x{full_res_img.shape[0]}")
+        
+        if st.button("🔍 ANALYZE ORIGINAL PHOTO"):
+            with st.spinner("Processing high-resolution image..."):
+                # Pass the original full-res image to the AI
+                result_img, labels = run_detection(full_res_img)
+                st.session_state["result_img"] = result_img
+                st.session_state["result_labels"] = labels
 
 # --- SHARED RESULTS DISPLAY ---
 if "result_img" in st.session_state:
     st.divider()
+    # Streamlit automatically handles the display width for the UI
     st.image(st.session_state["result_img"], channels="BGR", use_container_width=True)
     
     if st.session_state["result_labels"]:
         st.subheader("Detected Condition(s):")
         for label in st.session_state["result_labels"]:
             st.success(f"**{label}**")
-            if label == "Early Blight":
-                st.info("Tip: Dark 'target' spots. Remove lower leaves to increase airflow.")
-            elif label == "Yellow Leaf Curl Virus":
-                st.info("Tip: Upward leaf rolling. Control whiteflies to prevent spread.")
     else:
-        st.warning("No disease detected. Try a closer or clearer photo.")
+        st.warning("No disease detected. Please ensure the leaf is clear and centered.")
 
-    if st.button("Clear Results"):
+    if st.button("Clear and Start Over"):
         for key in ["result_img", "result_labels"]:
             if key in st.session_state: del st.session_state[key]
         st.rerun()
