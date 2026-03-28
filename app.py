@@ -55,7 +55,7 @@ def run_detection(img):
     
     return img, found_something
 
-# 4. Smooth Video Processor (No AI inside here!)
+# 4. Video Processor
 class VideoProcessor:
     def __init__(self):
         self.frame_lock = threading.Lock()
@@ -107,7 +107,7 @@ ctx = webrtc_streamer(
 
 # 6. Capture and Analyze Logic
 if ctx.video_processor:
-    if st.button("📸 CAPTURE & ANALYZE"):
+    if st.button("CAPTURE & ANALYZE"):
         with ctx.video_processor.frame_lock:
             if ctx.video_processor.last_raw_frame is not None:
                 # Copy the frame so we don't mess with the live feed
@@ -133,3 +133,7 @@ if "last_snap" in st.session_state:
     if st.button("Clear Photo"):
         del st.session_state["last_snap"]
         st.rerun()
+        
+    if "diag_snap" in st.session_state:
+    st.info("**Note for User:** Early Blight usually has dark 'target-like' spots. "
+            "If you see leaves curling upwards without spots, it is likely Yellow Leaf Curl.")
