@@ -9,7 +9,7 @@ from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
 # 1. Page Config
 st.set_page_config(page_title="Tomato Disease Analyzer", layout="centered")
 st.title("Tomato Disease Scanner")
-st.write("The camera is now optimized for speed. Point and click 'Capture' to analyze.")
+st.write("PLEASE WORK OMG. Point and click 'Capture' to analyze.")
 
 # 2. Class Names
 CLASSES = [
@@ -70,6 +70,25 @@ class VideoProcessor:
             self.last_raw_frame = img
 
         return av.VideoFrame.from_ndarray(img, format="bgr24")
+
+# Updated RTC Configuration for high compatibility
+RTC_CONFIGURATION = RTCConfiguration(
+    {
+        "iceServers": [
+            {"urls": ["stun:stun.l.google.com:19302"]},
+            {"urls": ["stun:stun1.l.google.com:19302"]},
+            {"urls": ["stun:stun2.l.google.com:19302"]},
+            {"urls": ["stun:stun3.l.google.com:19302"]},
+            {"urls": ["stun:stun4.l.google.com:19302"]},
+            # Optional: Add a free TURN server here if you sign up for Metered.ca
+            # {
+            #     "urls": "turn:global.relay.metered.ca:80",
+            #     "username": "your_username",
+            #     "credential": "your_password"
+            # }
+        ]
+    }
+)
 
 # 5. Camera Setup
 RTC_CONFIGURATION = RTCConfiguration({"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]})
