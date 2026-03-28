@@ -134,6 +134,4 @@ if "last_snap" in st.session_state:
         del st.session_state["last_snap"]
         st.rerun()
         
-    if "diag_snap" in st.session_state:
-    st.info("**Note for User:** Early Blight usually has dark 'target-like' spots. "
-            "If you see leaves curling upwards without spots, it is likely Yellow Leaf Curl.")
+    
