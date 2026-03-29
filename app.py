@@ -16,7 +16,6 @@ CLASSES = [
 ]
 
 # 1. LOAD THE LIGHTWEIGHT MODEL
-# This strictly limits the RAM usage so Render doesn't crash
 @st.cache_resource
 def load_session():
     opts = ort.SessionOptions()
@@ -24,6 +23,26 @@ def load_session():
     return ort.InferenceSession("best.onnx", sess_options=opts, providers=['CPUExecutionProvider'])
 
 session = load_session()
+
+# --- THE "BOUNCER" FUNCTION ---
+# This checks if the image actually contains green plant matter
+def is_likely_leaf(img):
+    # Convert image to HSV (Hue, Saturation, Value) to easily find colors
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    
+    # Define what "Green" looks like in HSV
+    lower_green = np.array([25, 40, 40])
+    upper_green = np.array([100, 255, 255])
+    
+    # Create a mask that only highlights the green pixels
+    mask = cv2.inRange(hsv, lower_green, upper_green)
+    
+    # Calculate what percentage of the image is green
+    green_percentage = (cv2.countNonZero(mask) / (img.shape[0] * img.shape[1])) * 100
+    
+    # If less than 2% of the image is green, it's probably not a leaf!
+    return green_percentage > 2.0
+
 
 def run_detection(img):
     h_orig, w_orig = img.shape[:2]
@@ -33,12 +52,9 @@ def run_detection(img):
     base_font_scale = max(0.6, w_orig / 900)
     
     # --- ACCURACY FIX 1: THE COLOR SWAP ---
-    # OpenCV reads images as Blue-Green-Red. 
-    # The AI expects Red-Green-Blue. We MUST swap them here!
     img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     
     # --- FIXED: Resize to 320 to match your ONNX model perfectly ---
-    # Make sure we are resizing the new 'img_rgb' color-corrected image
     img_resized = cv2.resize(img_rgb, (320, 320))
     img_input = img_resized.transpose(2, 0, 1)
     img_input = img_input[np.newaxis, :, :, :].astype(np.float32) / 255.0
@@ -60,19 +76,16 @@ def run_detection(img):
         if score > 0.45:
             x, y, w, h = row[0], row[1], row[2], row[3]
             
-            # --- FIXED: Map coordinates back using 320 instead of 416 ---
             x1 = int((x - w/2) * w_orig / 320)
             y1 = int((y - h/2) * h_orig / 320)
             x2 = int((x + w/2) * w_orig / 320)
             y2 = int((y + h/2) * h_orig / 320)
             
-            # Save for the NMS filter
             boxes.append([x1, y1, x2 - x1, y2 - y1])
             scores_list.append(score)
             class_ids.append(class_id)
 
     # 4. CLEAN UP BOXES (Non-Maximum Suppression)
-    # This prevents the AI from drawing 10 boxes on top of the same spot
     indices = cv2.dnn.NMSBoxes(boxes, scores_list, 0.45, 0.45)
     detected_labels = []
 
@@ -119,9 +132,14 @@ with tab1:
             with ctx.video_processor.frame_lock:
                 if ctx.video_processor.last_raw_frame is not None:
                     snap = ctx.video_processor.last_raw_frame.copy()
-                    result_img, labels = run_detection(snap)
-                    st.session_state["result_img"] = result_img
-                    st.session_state["result_labels"] = labels
+                    
+                    # --- NEW: Check if it's a leaf first (Webcam)! ---
+                    if not is_likely_leaf(snap):
+                        st.error("❌ No green leaf detected! Please point the camera at a plant.")
+                    else:
+                        result_img, labels = run_detection(snap)
+                        st.session_state["result_img"] = result_img
+                        st.session_state["result_labels"] = labels
 
 with tab2:
     uploaded_file = st.file_uploader("Upload leaf photo", type=["jpg", "jpeg", "png"])
@@ -140,9 +158,13 @@ with tab2:
         
         if st.button("🔍 ANALYZE PHOTO"):
             with st.spinner("Processing image..."):
-                result_img, labels = run_detection(full_res_img)
-                st.session_state["result_img"] = result_img
-                st.session_state["result_labels"] = labels
+                # --- NEW: Check if it's a leaf first (Upload)! ---
+                if not is_likely_leaf(full_res_img):
+                    st.error("❌ This doesn't look like a leaf! Please upload a clear photo of a plant.")
+                else:
+                    result_img, labels = run_detection(full_res_img)
+                    st.session_state["result_img"] = result_img
+                    st.session_state["result_labels"] = labels
 
 # --- SHARED RESULTS DISPLAY ---
 if "result_img" in st.session_state:
