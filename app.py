@@ -4,7 +4,13 @@ import numpy as np
 import av
 import threading
 from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
-from ultralytics import YOLO  # NEW: We use ultralytics directly instead of ONNX
+from ultralytics import YOLO  
+import torch
+
+# --- NEW: CRITICAL FOR RENDER SPEED ---
+# Stops PyTorch from trying to use CPU cores that don't exist on the free tier
+torch.set_num_threads(1) 
+# --------------------------------------
 
 st.set_page_config(page_title="Tomato Health Pro", layout="centered")
 st.title("Tomato Health Scanner")
@@ -18,16 +24,12 @@ def load_model():
 model = load_model()
 
 def run_detection(img):
-    # YOLOv8 handles all the resizing and math internally, so we don't 
-    # need the manual ONNX pre-processing code anymore!
-    
     # Run the image through the AI
     # conf=0.45 ignores guesses under 45% confidence
     # imgsz=416 balances speed and accuracy
     results = model(img, conf=0.45, imgsz=416)[0] 
     
     # YOLO provides a built-in function to draw the boxes directly
-    # on our image, which saves us a ton of math!
     annotated_img = results.plot()
     
     # Extract the names of the detected diseases
@@ -41,7 +43,7 @@ def run_detection(img):
     return annotated_img, detected_labels
 
 # --- UI TABS ---
-tab1, tab2 = st.tabs(["📷 Live Camera", "📁 Full-Res Upload"])
+tab1, tab2 = st.tabs(["📷 Live Camera", "📁 Fast Upload"])
 
 with tab1:
     class VideoProcessor:
@@ -74,15 +76,25 @@ with tab1:
                     st.session_state["result_labels"] = labels
 
 with tab2:
-    uploaded_file = st.file_uploader("Upload original leaf photo (High Quality)", type=["jpg", "jpeg", "png"])
+    uploaded_file = st.file_uploader("Upload leaf photo", type=["jpg", "jpeg", "png"])
     if uploaded_file is not None:
         file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
         full_res_img = cv2.imdecode(file_bytes, 1)
         
-        st.write(f"Detected Resolution: {full_res_img.shape[1]}x{full_res_img.shape[0]}")
+        # --- NEW: THE SPEED OPTIMIZATION ---
+        # Instantly shrinks massive 4K phone photos down to a max of 800px.
+        # This saves PyTorch from doing the heavy lifting and speeds up the site.
+        max_size = 800
+        h, w = full_res_img.shape[:2]
+        if max(h, w) > max_size:
+            scale = max_size / max(h, w)
+            full_res_img = cv2.resize(full_res_img, (int(w * scale), int(h * scale)))
+        # -----------------------------------
         
-        if st.button("🔍 ANALYZE ORIGINAL PHOTO"):
-            with st.spinner("Processing image..."):
+        st.write(f"Optimized Resolution: {full_res_img.shape[1]}x{full_res_img.shape[0]}")
+        
+        if st.button("🔍 ANALYZE PHOTO"):
+            with st.spinner("Processing image (Optimized)..."):
                 result_img, labels = run_detection(full_res_img)
                 st.session_state["result_img"] = result_img
                 st.session_state["result_labels"] = labels
