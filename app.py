@@ -32,8 +32,14 @@ def run_detection(img):
     base_thickness = max(2, int(w_orig / 250))
     base_font_scale = max(0.6, w_orig / 900)
     
+    # --- ACCURACY FIX 1: THE COLOR SWAP ---
+    # OpenCV reads images as Blue-Green-Red. 
+    # The AI expects Red-Green-Blue. We MUST swap them here!
+    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    
     # --- FIXED: Resize to 320 to match your ONNX model perfectly ---
-    img_resized = cv2.resize(img, (320, 320))
+    # Make sure we are resizing the new 'img_rgb' color-corrected image
+    img_resized = cv2.resize(img_rgb, (320, 320))
     img_input = img_resized.transpose(2, 0, 1)
     img_input = img_input[np.newaxis, :, :, :].astype(np.float32) / 255.0
 
@@ -64,25 +70,6 @@ def run_detection(img):
             boxes.append([x1, y1, x2 - x1, y2 - y1])
             scores_list.append(score)
             class_ids.append(class_id)
-
-    # 4. CLEAN UP BOXES (Non-Maximum Suppression)
-    # This prevents the AI from drawing 10 boxes on top of the same spot
-    indices = cv2.dnn.NMSBoxes(boxes, scores_list, 0.45, 0.45)
-    detected_labels = []
-
-    if len(indices) > 0:
-        for i in indices.flatten():
-            x, y, w, h = boxes[i]
-            cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), base_thickness)
-            
-            label_text = f"{CLASSES[class_ids[i]]} ({int(scores_list[i]*100)}%)"
-            cv2.putText(img, label_text, (x, max(20, y - 10)), 
-                        cv2.FONT_HERSHEY_SIMPLEX, base_font_scale, (255, 255, 255), base_thickness)
-            
-            if CLASSES[class_ids[i]] not in detected_labels:
-                detected_labels.append(CLASSES[class_ids[i]])
-
-    return img, detected_labels
 
     # 4. CLEAN UP BOXES (Non-Maximum Suppression)
     # This prevents the AI from drawing 10 boxes on top of the same spot
