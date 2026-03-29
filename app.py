@@ -1,46 +1,89 @@
 import streamlit as st
 import cv2
 import numpy as np
+import onnxruntime as ort
 import av
 import threading
 from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
-from ultralytics import YOLO  
-import torch
-
-# --- NEW: CRITICAL FOR RENDER SPEED ---
-# Stops PyTorch from trying to use CPU cores that don't exist on the free tier
-torch.set_num_threads(1) 
-# --------------------------------------
 
 st.set_page_config(page_title="Tomato Health Pro", layout="centered")
 st.title("Tomato Health Scanner")
 
-# Load the PyTorch model directly
-@st.cache_resource
-def load_model():
-    # Make sure 'best.pt' is in the same folder as this app.py file
-    return YOLO("best.pt")
+CLASSES = [
+    "Bacterial Spot", "Early Blight", "Late Blight", "Leaf Mold", 
+    "Septoria Leaf Spot", "Spider Mites", "Target Spot", 
+    "Yellow Leaf Curl Virus", "Mosaic Virus", "Healthy"
+]
 
-model = load_model()
+# 1. LOAD THE LIGHTWEIGHT MODEL
+# This strictly limits the RAM usage so Render doesn't crash
+@st.cache_resource
+def load_session():
+    opts = ort.SessionOptions()
+    opts.intra_op_num_threads = 1  # Prevents CPU traffic jams
+    return ort.InferenceSession("best.onnx", sess_options=opts, providers=['CPUExecutionProvider'])
+
+session = load_session()
 
 def run_detection(img):
-    # Run the image through the AI
-    # conf=0.45 ignores guesses under 45% confidence
-    # imgsz=416 balances speed and accuracy
-    results = model(img, conf=0.45, imgsz=416)[0] 
+    h_orig, w_orig = img.shape[:2]
     
-    # YOLO provides a built-in function to draw the boxes directly
-    annotated_img = results.plot()
+    # Dynamic scaling so boxes look good on both webcams and 4K phone photos
+    base_thickness = max(2, int(w_orig / 250))
+    base_font_scale = max(0.6, w_orig / 900)
     
-    # Extract the names of the detected diseases
-    detected_labels = []
-    for box in results.boxes:
-        class_id = int(box.cls[0])
-        class_name = model.names[class_id]
-        if class_name not in detected_labels:
-            detected_labels.append(class_name)
+    # 2. PREPARE IMAGE FOR ONNX
+    # We use 416 to match the balanced export we did earlier
+    img_resized = cv2.resize(img, (416, 416))
+    img_input = img_resized.transpose(2, 0, 1)
+    img_input = img_input[np.newaxis, :, :, :].astype(np.float32) / 255.0
+
+    # 3. RUN THE AI
+    outputs = session.run(None, {session.get_inputs()[0].name: img_input})
+    output = outputs[0][0].T 
+    
+    boxes = []
+    scores_list = []
+    class_ids = []
+
+    # Filter out weak guesses
+    for row in output:
+        scores = row[4:]
+        class_id = np.argmax(scores)
+        score = scores[class_id]
+        
+        if score > 0.45:
+            x, y, w, h = row[0], row[1], row[2], row[3]
             
-    return annotated_img, detected_labels
+            # Map coordinates back to the original photo size
+            x1 = int((x - w/2) * w_orig / 416)
+            y1 = int((y - h/2) * h_orig / 416)
+            x2 = int((x + w/2) * w_orig / 416)
+            y2 = int((y + h/2) * h_orig / 416)
+            
+            # Save for the NMS filter
+            boxes.append([x1, y1, x2 - x1, y2 - y1])
+            scores_list.append(score)
+            class_ids.append(class_id)
+
+    # 4. CLEAN UP BOXES (Non-Maximum Suppression)
+    # This prevents the AI from drawing 10 boxes on top of the same spot
+    indices = cv2.dnn.NMSBoxes(boxes, scores_list, 0.45, 0.45)
+    detected_labels = []
+
+    if len(indices) > 0:
+        for i in indices.flatten():
+            x, y, w, h = boxes[i]
+            cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), base_thickness)
+            
+            label_text = f"{CLASSES[class_ids[i]]} ({int(scores_list[i]*100)}%)"
+            cv2.putText(img, label_text, (x, max(20, y - 10)), 
+                        cv2.FONT_HERSHEY_SIMPLEX, base_font_scale, (255, 255, 255), base_thickness)
+            
+            if CLASSES[class_ids[i]] not in detected_labels:
+                detected_labels.append(CLASSES[class_ids[i]])
+
+    return img, detected_labels
 
 # --- UI TABS ---
 tab1, tab2 = st.tabs(["📷 Live Camera", "📁 Fast Upload"])
@@ -81,20 +124,17 @@ with tab2:
         file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
         full_res_img = cv2.imdecode(file_bytes, 1)
         
-        # --- NEW: THE SPEED OPTIMIZATION ---
-        # Instantly shrinks massive 4K phone photos down to a max of 800px.
-        # This saves PyTorch from doing the heavy lifting and speeds up the site.
+        # PRE-SHRINKER: Stops massive phone photos from lagging the server
         max_size = 800
         h, w = full_res_img.shape[:2]
         if max(h, w) > max_size:
             scale = max_size / max(h, w)
             full_res_img = cv2.resize(full_res_img, (int(w * scale), int(h * scale)))
-        # -----------------------------------
         
         st.write(f"Optimized Resolution: {full_res_img.shape[1]}x{full_res_img.shape[0]}")
         
         if st.button("🔍 ANALYZE PHOTO"):
-            with st.spinner("Processing image (Optimized)..."):
+            with st.spinner("Processing image..."):
                 result_img, labels = run_detection(full_res_img)
                 st.session_state["result_img"] = result_img
                 st.session_state["result_labels"] = labels
@@ -102,7 +142,6 @@ with tab2:
 # --- SHARED RESULTS DISPLAY ---
 if "result_img" in st.session_state:
     st.divider()
-    # Display the image with the AI's drawn boxes
     st.image(st.session_state["result_img"], channels="BGR", use_container_width=True)
     
     if st.session_state["result_labels"]:
