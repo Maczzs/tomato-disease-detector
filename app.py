@@ -1,72 +1,44 @@
 import streamlit as st
 import cv2
 import numpy as np
-import onnxruntime as ort
 import av
 import threading
 from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
+from ultralytics import YOLO  # NEW: We use ultralytics directly instead of ONNX
 
 st.set_page_config(page_title="Tomato Health Pro", layout="centered")
 st.title("Tomato Health Scanner")
 
-CLASSES = [
-    "Bacterial Spot", "Early Blight", "Late Blight", "Leaf Mold", 
-    "Septoria Leaf Spot", "Spider Mites", "Target Spot", 
-    "Yellow Leaf Curl Virus", "Mosaic Virus", "Healthy"
-]
-
+# Load the PyTorch model directly
 @st.cache_resource
-def load_session():
-    opts = ort.SessionOptions()
-    opts.intra_op_num_threads = 1
-    return ort.InferenceSession("best.onnx", sess_options=opts, providers=['CPUExecutionProvider'])
+def load_model():
+    # Make sure 'best.pt' is in the same folder as this app.py file
+    return YOLO("best.pt")
 
-session = load_session()
+model = load_model()
 
 def run_detection(img):
-    h_orig, w_orig = img.shape[:2]
+    # YOLOv8 handles all the resizing and math internally, so we don't 
+    # need the manual ONNX pre-processing code anymore!
     
-    # --- DYNAMIC SCALING ---
-    # This makes sure boxes/text aren't tiny on 4K photos
-    base_thickness = max(2, int(w_orig / 250))
-    base_font_scale = max(0.6, w_orig / 900)
+    # Run the image through the AI
+    # conf=0.45 ignores guesses under 45% confidence
+    # imgsz=416 balances speed and accuracy
+    results = model(img, conf=0.45, imgsz=416)[0] 
     
-    # Pre-process for ONNX (Always 320 for the AI's brain)
-    img_resized = cv2.resize(img, (320, 320))
-    img_input = img_resized.transpose(2, 0, 1)
-    img_input = img_input[np.newaxis, :, :, :].astype(np.float32) / 255.0
-
-    outputs = session.run(None, {session.get_inputs()[0].name: img_input})
-    output = outputs[0][0].T 
+    # YOLO provides a built-in function to draw the boxes directly
+    # on our image, which saves us a ton of math!
+    annotated_img = results.plot()
     
+    # Extract the names of the detected diseases
     detected_labels = []
-    for row in output:
-        scores = row[4:]
-        class_id = np.argmax(scores)
-        score = scores[class_id]
-        
-        if score > 0.45:
-            x, y, w, h = row[0], row[1], row[2], row[3]
+    for box in results.boxes:
+        class_id = int(box.cls[0])
+        class_name = model.names[class_id]
+        if class_name not in detected_labels:
+            detected_labels.append(class_name)
             
-            # Mapping coordinates back to the ORIGINAL RESOLUTION
-            x1, y1 = int((x - w/2) * w_orig / 320), int((y - h/2) * h_orig / 320)
-            x2, y2 = int((x + w/2) * w_orig / 320), int((y + h/2) * h_orig / 320)
-            
-            # Draw with dynamic thickness
-            cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), base_thickness)
-            
-            label_text = f"{CLASSES[class_id]} ({int(score*100)}%)"
-            # Adjust text offset based on image size
-            offset = int(h_orig * 0.02)
-            text_y = y1 - offset if y1 > offset*2 else y1 + offset*2
-            
-            cv2.putText(img, label_text, (x1, text_y), 
-                        cv2.FONT_HERSHEY_SIMPLEX, base_font_scale, (255, 255, 255), base_thickness // 2 + 1)
-            
-            if CLASSES[class_id] not in detected_labels:
-                detected_labels.append(CLASSES[class_id])
-    
-    return img, detected_labels
+    return annotated_img, detected_labels
 
 # --- UI TABS ---
 tab1, tab2 = st.tabs(["📷 Live Camera", "📁 Full-Res Upload"])
@@ -96,14 +68,12 @@ with tab1:
         if st.button("📸 CAPTURE AND ANALYZE"):
             with ctx.video_processor.frame_lock:
                 if ctx.video_processor.last_raw_frame is not None:
-                    # Video capture remains at 640 width (optimized for speed)
                     snap = ctx.video_processor.last_raw_frame.copy()
                     result_img, labels = run_detection(snap)
                     st.session_state["result_img"] = result_img
                     st.session_state["result_labels"] = labels
 
 with tab2:
-    # No limit on resolution here!
     uploaded_file = st.file_uploader("Upload original leaf photo (High Quality)", type=["jpg", "jpeg", "png"])
     if uploaded_file is not None:
         file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
@@ -112,8 +82,7 @@ with tab2:
         st.write(f"Detected Resolution: {full_res_img.shape[1]}x{full_res_img.shape[0]}")
         
         if st.button("🔍 ANALYZE ORIGINAL PHOTO"):
-            with st.spinner("Processing high-resolution image..."):
-                # Pass the original full-res image to the AI
+            with st.spinner("Processing image..."):
                 result_img, labels = run_detection(full_res_img)
                 st.session_state["result_img"] = result_img
                 st.session_state["result_labels"] = labels
@@ -121,7 +90,7 @@ with tab2:
 # --- SHARED RESULTS DISPLAY ---
 if "result_img" in st.session_state:
     st.divider()
-    # Streamlit automatically handles the display width for the UI
+    # Display the image with the AI's drawn boxes
     st.image(st.session_state["result_img"], channels="BGR", use_container_width=True)
     
     if st.session_state["result_labels"]:
