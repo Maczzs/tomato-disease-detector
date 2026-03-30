@@ -15,51 +15,50 @@ CLASSES = [
     "Yellow Leaf Curl Virus", "Mosaic Virus", "Healthy"
 ]
 
+# --- NEW: KNOWLEDGE BASE (TREATMENTS) ---
+# This dictionary matches the AI's diagnosis with real-world solutions
+TREATMENTS = {
+    "Bacterial Spot": "**Treatment:** Apply copper-based fungicides. Remove and destroy heavily infected leaves. Avoid overhead watering to keep leaves dry.",
+    "Early Blight": "**Treatment:** Prune infected lower leaves to prevent spread. Apply fungicides containing Mancozeb or Chlorothalonil. Use mulch to prevent soil splashing.",
+    "Late Blight": "**Treatment:** 🚨 Highly contagious! Remove and destroy infected plants immediately. Apply copper fungicides. Ensure plants have plenty of spacing for airflow.",
+    "Leaf Mold": "**Treatment:** Improve air circulation by pruning and spacing plants. Avoid watering the foliage. Use a preventative fungicide if humidity is very high.",
+    "Septoria Leaf Spot": "**Treatment:** Remove infected leaves immediately. Apply organic copper sprays or chemical fungicides. Water at the base of the plant, not the leaves.",
+    "Spider Mites": "**Treatment:** Spray leaves with neem oil or insecticidal soap. Introduce natural predators like ladybugs. A strong blast of water from a hose can also dislodge them.",
+    "Target Spot": "**Treatment:** Ensure good airflow and avoid over-fertilizing with nitrogen. Apply target-specific fungicides and remove any diseased plant debris from the soil.",
+    "Yellow Leaf Curl Virus": "**Treatment:** Transmitted by whiteflies. Use yellow sticky traps to catch whiteflies. Remove infected plants immediately as there is no chemical cure for the virus.",
+    "Mosaic Virus": "**Treatment:** 🚨 No cure! Remove and burn infected plants immediately. Disinfect your gardening tools and wash your hands thoroughly, as it spreads easily through contact.",
+    "Healthy": "🌱 **Looking good!** Keep up the great work. Remember to water at the base of the plant, ensure plenty of sunlight, and maintain good soil nutrition."
+}
+
 # 1. LOAD THE LIGHTWEIGHT MODEL
 @st.cache_resource
 def load_session():
     opts = ort.SessionOptions()
-    opts.intra_op_num_threads = 1  # Prevents CPU traffic jams
+    opts.intra_op_num_threads = 1  
     return ort.InferenceSession("best.onnx", sess_options=opts, providers=['CPUExecutionProvider'])
 
 session = load_session()
 
 # --- THE "BOUNCER" FUNCTION ---
-# This checks if the image actually contains green plant matter
 def is_likely_leaf(img):
-    # Convert image to HSV (Hue, Saturation, Value) to easily find colors
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    
-    # Define what "Green" looks like in HSV
     lower_green = np.array([25, 40, 40])
     upper_green = np.array([100, 255, 255])
-    
-    # Create a mask that only highlights the green pixels
     mask = cv2.inRange(hsv, lower_green, upper_green)
-    
-    # Calculate what percentage of the image is green
     green_percentage = (cv2.countNonZero(mask) / (img.shape[0] * img.shape[1])) * 100
-    
-    # If less than 2% of the image is green, it's probably not a leaf!
     return green_percentage > 2.0
-
 
 def run_detection(img):
     h_orig, w_orig = img.shape[:2]
     
-    # Dynamic scaling so boxes look good on both webcams and 4K phone photos
     base_thickness = max(2, int(w_orig / 250))
     base_font_scale = max(0.6, w_orig / 900)
     
-    # --- ACCURACY FIX 1: THE COLOR SWAP ---
     img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    
-    # --- FIXED: Resize to 320 to match your ONNX model perfectly ---
     img_resized = cv2.resize(img_rgb, (320, 320))
     img_input = img_resized.transpose(2, 0, 1)
     img_input = img_input[np.newaxis, :, :, :].astype(np.float32) / 255.0
 
-    # 3. RUN THE AI
     outputs = session.run(None, {session.get_inputs()[0].name: img_input})
     output = outputs[0][0].T 
     
@@ -67,7 +66,6 @@ def run_detection(img):
     scores_list = []
     class_ids = []
 
-    # Filter out weak guesses
     for row in output:
         scores = row[4:]
         class_id = np.argmax(scores)
@@ -75,7 +73,6 @@ def run_detection(img):
         
         if score > 0.45:
             x, y, w, h = row[0], row[1], row[2], row[3]
-            
             x1 = int((x - w/2) * w_orig / 320)
             y1 = int((y - h/2) * h_orig / 320)
             x2 = int((x + w/2) * w_orig / 320)
@@ -85,7 +82,6 @@ def run_detection(img):
             scores_list.append(score)
             class_ids.append(class_id)
 
-    # 4. CLEAN UP BOXES (Non-Maximum Suppression)
     indices = cv2.dnn.NMSBoxes(boxes, scores_list, 0.45, 0.45)
     detected_labels = []
 
@@ -133,7 +129,6 @@ with tab1:
                 if ctx.video_processor.last_raw_frame is not None:
                     snap = ctx.video_processor.last_raw_frame.copy()
                     
-                    # --- NEW: Check if it's a leaf first (Webcam)! ---
                     if not is_likely_leaf(snap):
                         st.error("❌ No green leaf detected! Please point the camera at a plant.")
                     else:
@@ -147,7 +142,6 @@ with tab2:
         file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
         full_res_img = cv2.imdecode(file_bytes, 1)
         
-        # PRE-SHRINKER: Stops massive phone photos from lagging the server
         max_size = 800
         h, w = full_res_img.shape[:2]
         if max(h, w) > max_size:
@@ -158,7 +152,6 @@ with tab2:
         
         if st.button("🔍 ANALYZE PHOTO"):
             with st.spinner("Processing image..."):
-                # --- NEW: Check if it's a leaf first (Upload)! ---
                 if not is_likely_leaf(full_res_img):
                     st.error("❌ This doesn't look like a leaf! Please upload a clear photo of a plant.")
                 else:
@@ -172,9 +165,19 @@ if "result_img" in st.session_state:
     st.image(st.session_state["result_img"], channels="BGR", use_container_width=True)
     
     if st.session_state["result_labels"]:
-        st.subheader("Detected Condition(s):")
+        st.subheader("📋 Diagnosis & Treatment Plan:")
+        
+        # --- NEW: DISPLAY THE TREATMENTS ---
         for label in st.session_state["result_labels"]:
-            st.success(f"**{label}**")
+            # If it's healthy, show a green success box
+            if label == "Healthy":
+                st.success(f"**{label}**")
+                st.info(TREATMENTS[label])
+            # If it's a disease, show a red warning box and the treatment
+            else:
+                st.error(f"**Detected: {label}**")
+                # Look up the treatment from our dictionary
+                st.info(TREATMENTS.get(label, "Treatment information not available."))
     else:
         st.warning("No disease detected. Please ensure the leaf is clear and centered.")
 
